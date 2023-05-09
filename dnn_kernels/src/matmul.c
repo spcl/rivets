@@ -54,6 +54,13 @@ void matmul_fp64(
 #define BB_(b, k, n) weight_buf[(b) * buf_size_k * buf_size_n + (k) * buf_size_n + (n)]
 #define CC_(b, m, n) dst_buf[(b) * buf_size_m * buf_size_n + (m) * buf_size_n + (n)]
 
+#define AA0_(b, m, k) src_buf0[(b) * buf_size_m * buf_size_k + (m) * buf_size_k + (k)]
+#define BB0_(b, k, n) weight_buf0[(b) * buf_size_k * buf_size_n + (k) * buf_size_n + (n)]
+#define CC0_(b, m, n) dst_buf0[(b) * buf_size_m * buf_size_n + (m) * buf_size_n + (n)]
+#define AA1_(b, m, k) src_buf1[(b) * buf_size_m * buf_size_k + (m) * buf_size_k + (k)]
+#define BB1_(b, k, n) weight_buf1[(b) * buf_size_k * buf_size_n + (k) * buf_size_n + (n)]
+#define CC1_(b, m, n) dst_buf1[(b) * buf_size_m * buf_size_n + (m) * buf_size_n + (n)]
+
 #define RC_(m, n) dst_reg_ ## m ## _ ## n
 
 // WARNING: currently implementation is not flexible with supported strides
@@ -494,8 +501,10 @@ void matmul_raw_fp64_sdma_ssr_frep(
     if (buf_size_b_pow2 > 1 && buf_size_b_pow2 > buf_size_b) buf_size_b_pow2 /= 2;
     buf_size_b = (B < buf_size_b_pow2) ? B : buf_size_b_pow2;
 
+    size_t stages = 2;
+
     if (tid == 0) {
-        double* src_buf = (double*) snrt_l1alloc(buf_size_b * (M * K + K * N + M * N) * sizeof(double));
+        double* src_buf = (double*) snrt_l1alloc(stages * buf_size_b * (M * K + K * N + M * N) * sizeof(double));
         g_src_buf = src_buf;
         if (!src_buf) {
             printf("Error: failed to allocate scratchpad memory\n");
@@ -506,57 +515,115 @@ void matmul_raw_fp64_sdma_ssr_frep(
 
     snrt_cluster_hw_barrier();
 
-    double* src_buf = g_src_buf;
-    double* weight_buf = src_buf + buf_size_b * M * K;
-    double* dst_buf = weight_buf + buf_size_b * K * N;
+    double* src_buf0 = g_src_buf;
+    double* weight_buf0 = src_buf0 + buf_size_b * M * K;
+    double* dst_buf0 = weight_buf0 + buf_size_b * K * N;
+    double* src_buf1 = dst_buf0 + buf_size_b * M * N;
+    double* weight_buf1 = src_buf1 + buf_size_b * M * K;
+    double* dst_buf1 = weight_buf1 + buf_size_b * K * N;
 
-    unsigned long t1t, t1p, t1c, t1e;
-    unsigned long t2t, t2p, t2c, t2e;
-    for (size_t b1 = 0; b1 < B; b1 += buf_size_b) {
-        if (snrt_is_dm_core()) {
-            snrt_dma_start_1d(
-                /* dst */ &AA_(0, 0, 0),
+    if (snrt_is_dm_core()) {
+        // copy data for the first iteration
+        size_t b1 = 0;
+        snrt_dma_start_1d(
+                /* dst */ &AA0_(0, 0, 0),
                 /* src */ &A_(b1, 0, 0),
                 /* size */ buf_size_b * M * K * sizeof(double)
             );
             snrt_dma_start_1d(
-                /* dst */ &BB_(0, 0, 0),
+                /* dst */ &BB0_(0, 0, 0),
                 /* src */ &B_(b1, 0, 0),
                 /* size */ buf_size_b * K * N * sizeof(double)
             );
             snrt_dma_start_1d(
-                /* dst */ &CC_(0, 0, 0),
+                /* dst */ &CC0_(0, 0, 0),
                 /* src */ &D_(b1, 0, 0),
                 /* size */ buf_size_b * M * N * sizeof(double)
             );
-            snrt_dma_wait_all();
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();
+
+    for (size_t b1 = 0; b1 < B; b1 += buf_size_b) {
+        if (snrt_is_dm_core()) {
+            // finish data movement for the previous iteration
+            // check it is not the first iteration
+            if (b1 != 0) {
+                snrt_dma_start_1d(
+                    /* dst */ &C_(b1 - buf_size_b, 0, 0),
+                    /* src */ &CC1_(0, 0, 0),
+                    /* size */ buf_size_b * M * N * sizeof(double)
+                );
+                snrt_dma_wait_all();
+            }
         }
-        snrt_cluster_hw_barrier();
+
+        if (snrt_is_dm_core()) {
+            // start data movement for the next iteration
+            // check it is not the last iteration
+            if (b1 + buf_size_b != B) {
+                snrt_dma_start_1d(
+                    /* dst */ &AA1_(0, 0, 0),
+                    /* src */ &A_(b1 + buf_size_b, 0, 0),
+                    /* size */ buf_size_b * M * K * sizeof(double)
+                );
+                snrt_dma_start_1d(
+                    /* dst */ &BB1_(0, 0, 0),
+                    /* src */ &B_(b1 + buf_size_b, 0, 0),
+                    /* size */ buf_size_b * K * N * sizeof(double)
+                );
+                snrt_dma_start_1d(
+                    /* dst */ &CC1_(0, 0, 0),
+                    /* src */ &D_(b1 + buf_size_b, 0, 0),
+                    /* size */ buf_size_b * M * N * sizeof(double)
+                );
+                snrt_dma_wait_all();
+            }
+        }
         
         if (tid == 0) {
             for (size_t b2 = 0; b2 < buf_size_b; b2++) {    
                 uint32_t ALPHA = 1;
                 gemm_fp64_opt(
                     /*uint32_t M, uint32_t N, uint32_t K, */ M, N, K,
-                    /*double* A, uint32_t ldA, uint32_t ta, */ &AA_(b2, 0, 0), K, 0,
-                    /*double* B, uint32_t ldB, int32_t tb, */ &BB_(b2, 0, 0), N, 0,
-                    /*double* C, uint32_t ldC,*/ &CC_(b2, 0, 0), N,
+                    /*double* A, uint32_t ldA, uint32_t ta, */ &AA0_(b2, 0, 0), K, 0,
+                    /*double* B, uint32_t ldB, int32_t tb, */ &BB0_(b2, 0, 0), N, 0,
+                    /*double* C, uint32_t ldC,*/ &CC0_(b2, 0, 0), N,
                     /*const uint32_t* ALPHA,*/ &ALPHA,
-                    /*uint32_t setup_SSRS*/ 1
+                    /*uint32_t setup_SSRS*/ b1 == 0
                 );
             }
         }
+
         snrt_cluster_hw_barrier();
-        if (snrt_is_dm_core()) {
-            snrt_dma_start_1d(
-                /* dst */ &C_(b1, 0, 0),
-                /* src */ &CC_(0, 0, 0),
-                /* size */ buf_size_b * M * N * sizeof(double)
-            );
-            snrt_dma_wait_all();
-        }
-        snrt_cluster_hw_barrier();
+
+        // swap current and next buffers
+        double* tmp_buf;
+
+        tmp_buf = src_buf0;
+        src_buf0 = src_buf1;
+        src_buf1 = tmp_buf;
+
+        tmp_buf = weight_buf0;
+        weight_buf0 = weight_buf1;
+        weight_buf1 = tmp_buf;
+        
+        tmp_buf = dst_buf0;
+        dst_buf0 = dst_buf1;
+        dst_buf1 = tmp_buf;
     }
+
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(
+            /* dst */ &C_(B - buf_size_b, 0, 0),
+            /* src */ &CC1_(0, 0, 0),
+            /* size */ buf_size_b * M * N * sizeof(double)
+        );
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();
 }
 
 void matmul_fp64_sdma_ssr_frep_omp(
@@ -694,11 +761,12 @@ void matmul_raw_fp64_sdma_ssr_frep_omp(
     if (buf_size_b_pow2 > 1 && buf_size_b_pow2 > buf_size_b) buf_size_b_pow2 /= 2;
     buf_size_b = (B < buf_size_b_pow2) ? B : buf_size_b_pow2;
 
+    size_t stages = 2;
+
     if (tid == 0) {
-        double* src_buf = (double*) snrt_l1alloc(buf_size_b * (M * K + K * N + M * N) * sizeof(double));
-        g_src_buf = src_buf;
+        g_src_buf = (double*) snrt_l1alloc(stages * buf_size_b * (M * K + K * N + M * N) * sizeof(double));
     
-        if (!src_buf) {
+        if (!g_src_buf) {
             printf("Error: failed to allocate scratchpad memory\n");
             while (1) {}
             return;
@@ -707,55 +775,113 @@ void matmul_raw_fp64_sdma_ssr_frep_omp(
 
     snrt_cluster_hw_barrier();
 
-    double* src_buf = g_src_buf;
-    double* weight_buf = src_buf + buf_size_b * M * K;
-    double* dst_buf = weight_buf + buf_size_b * K * N;
+    double* src_buf0 = g_src_buf;
+    double* weight_buf0 = src_buf0 + buf_size_b * M * K;
+    double* dst_buf0 = weight_buf0 + buf_size_b * K * N;
+    double* src_buf1 = dst_buf0 + buf_size_b * M * N;
+    double* weight_buf1 = src_buf1 + buf_size_b * M * K;
+    double* dst_buf1 = weight_buf1 + buf_size_b * K * N;
 
-    unsigned long t1t, t1p, t1c, t1e;
-    unsigned long t2t, t2p, t2c, t2e;
-    for (size_t b1 = 0; b1 < B; b1 += buf_size_b) {
-        if (snrt_is_dm_core()) {
-            snrt_dma_start_1d(
-                /* dst */ &AA_(0, 0, 0),
+    if (snrt_is_dm_core()) {
+        // copy data for the first iteration
+        size_t b1 = 0;
+        snrt_dma_start_1d(
+                /* dst */ &AA0_(0, 0, 0),
                 /* src */ &A_(b1, 0, 0),
                 /* size */ buf_size_b * M * K * sizeof(double)
             );
             snrt_dma_start_1d(
-                /* dst */ &BB_(0, 0, 0),
+                /* dst */ &BB0_(0, 0, 0),
                 /* src */ &B_(b1, 0, 0),
                 /* size */ buf_size_b * K * N * sizeof(double)
             );
             snrt_dma_start_1d(
-                /* dst */ &CC_(0, 0, 0),
+                /* dst */ &CC0_(0, 0, 0),
                 /* src */ &D_(b1, 0, 0),
                 /* size */ buf_size_b * M * N * sizeof(double)
             );
-            snrt_dma_wait_all();
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();
+
+    for (size_t b1 = 0; b1 < B; b1 += buf_size_b) {
+        if (snrt_is_dm_core()) {
+            // finish data movement for the previous iteration
+            // check it is not the first iteration
+            if (b1 != 0) {
+                snrt_dma_start_1d(
+                    /* dst */ &C_(b1 - buf_size_b, 0, 0),
+                    /* src */ &CC1_(0, 0, 0),
+                    /* size */ buf_size_b * M * N * sizeof(double)
+                );
+                snrt_dma_wait_all();
+            }
         }
-        snrt_cluster_hw_barrier();
+
+        if (snrt_is_dm_core()) {
+            // start data movement for the next iteration
+            // check it is not the last iteration
+            if (b1 + buf_size_b != B) {
+                snrt_dma_start_1d(
+                    /* dst */ &AA1_(0, 0, 0),
+                    /* src */ &A_(b1 + buf_size_b, 0, 0),
+                    /* size */ buf_size_b * M * K * sizeof(double)
+                );
+                snrt_dma_start_1d(
+                    /* dst */ &BB1_(0, 0, 0),
+                    /* src */ &B_(b1 + buf_size_b, 0, 0),
+                    /* size */ buf_size_b * K * N * sizeof(double)
+                );
+                snrt_dma_start_1d(
+                    /* dst */ &CC1_(0, 0, 0),
+                    /* src */ &D_(b1 + buf_size_b, 0, 0),
+                    /* size */ buf_size_b * M * N * sizeof(double)
+                );
+                snrt_dma_wait_all();
+            }
+        }
         
         if (snrt_is_compute_core()) {
             for (size_t b2 = 0; b2 < buf_size_b; b2++) {    
                 uint32_t ALPHA = 1;
                 gemm_fp64_opt(
                     /*uint32_t M, uint32_t N, uint32_t K, */ m_len, N, K,
-                    /*double* A, uint32_t ldA, uint32_t ta, */ &AA_(b2, m_off, 0), K, 0,
-                    /*double* B, uint32_t ldB, int32_t tb, */ &BB_(b2, 0, 0), N, 0,
-                    /*double* C, uint32_t ldC,*/ &CC_(b2, m_off, 0), N,
+                    /*double* A, uint32_t ldA, uint32_t ta, */ &AA0_(b2, m_off, 0), K, 0,
+                    /*double* B, uint32_t ldB, int32_t tb, */ &BB0_(b2, 0, 0), N, 0,
+                    /*double* C, uint32_t ldC,*/ &CC0_(b2, m_off, 0), N,
                     /*const uint32_t* ALPHA,*/ &ALPHA,
-                    /*uint32_t setup_SSRS*/ 1
+                    /*uint32_t setup_SSRS*/ b1 == 0
                 );
             }
         }
+
         snrt_cluster_hw_barrier();
-        if (snrt_is_dm_core()) {
-            snrt_dma_start_1d(
-                /* dst */ &C_(b1, 0, 0),
-                /* src */ &CC_(0, 0, 0),
-                /* size */ buf_size_b * M * N * sizeof(double)
-            );
-            snrt_dma_wait_all();
-        }
-        snrt_cluster_hw_barrier();
+
+        // swap current and next buffers
+        double* tmp_buf;
+
+        tmp_buf = src_buf0;
+        src_buf0 = src_buf1;
+        src_buf1 = tmp_buf;
+
+        tmp_buf = weight_buf0;
+        weight_buf0 = weight_buf1;
+        weight_buf1 = tmp_buf;
+        
+        tmp_buf = dst_buf0;
+        dst_buf0 = dst_buf1;
+        dst_buf1 = tmp_buf;
     }
+
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(
+            /* dst */ &C_(B - buf_size_b, 0, 0),
+            /* src */ &CC1_(0, 0, 0),
+            /* size */ buf_size_b * M * N * sizeof(double)
+        );
+        snrt_dma_wait_all();
+    }
+
+    snrt_cluster_hw_barrier();
 }
