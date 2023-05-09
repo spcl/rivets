@@ -389,8 +389,11 @@ void __attribute__((noinline)) layer_norm_raw_dm_fp64_sdma_ssr_frep(
 ) {
     unsigned tid = snrt_cluster_core_idx();
     unsigned ntd = 8 /*snrt_cluster_core_num()*/;
+    const int unroll = 4;
 
-    const size_t batch_buf_size = B;
+    size_t scratchpad_max_size = 1024 * 8;
+    size_t batch_buf_size = (B * N < scratchpad_max_size) ? B : (scratchpad_max_size / N);
+    if (batch_buf_size < ntd * unroll) batch_buf_size = ntd * unroll;
 
     snrt_cluster_hw_barrier();
 
@@ -446,7 +449,9 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep(
     unsigned ntd = 8 /*snrt_cluster_core_num()*/;
     const int unroll = 4;
 
-    const size_t batch_buf_size = B;
+    size_t scratchpad_max_size = 1024 * 8;
+    size_t batch_buf_size = (B * N < scratchpad_max_size) ? B : (scratchpad_max_size / N);
+    if (batch_buf_size < ntd * unroll) batch_buf_size = ntd * unroll;
 
     if (tid == 0) {
         double* src_buf = (double*) snrt_l1alloc((batch_buf_size * N + N + N) * sizeof(double));
@@ -762,7 +767,9 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep_omp(
     unsigned ntd = 8 /*snrt_cluster_core_num()*/;
     const int unroll = 4;
 
-    const size_t batch_buf_size = B;
+    size_t scratchpad_max_size = 1024 * 8;
+    size_t batch_buf_size = (B * N < scratchpad_max_size) ? B : (scratchpad_max_size / N);
+    if (batch_buf_size < ntd * unroll) batch_buf_size = ntd * unroll;
 
     if (tid == 0) {
         double* src_buf = (double*) snrt_l1alloc((batch_buf_size * N + N + N) * sizeof(double));
@@ -808,7 +815,6 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep_omp(
         /* memcpy src */
 
         snrt_cluster_hw_barrier();
-
         if (1 /* is compute core */) {
             
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, &tmp_buf[N * b2_len_thr * tid]);
