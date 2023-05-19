@@ -3,6 +3,15 @@ DOCKER_OPTS ?= --security-opt label=disable
 DOCKER_RUN ?= $(DOCKER) run $(DOCKER_OPTS)
 
 
+.SECONDEXPANSION:
+#https://www.gnu.org/software/make/manual/make.html#Secondary-Expansion
+
+
+.PHONY: clean
+clean:
+	rm -rf snRuntime-build logs dnn_kernels/build-cluster dnn_kernels/build-banshee
+
+
 snRuntime-build/libsnRuntime-cluster.a snRuntime-build/libsnRuntime-banshee.a:
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
@@ -65,7 +74,11 @@ dnn_kernels/build-%/libDNNKernels.a: snRuntime-build/libsnRuntime-%.a
 		"
 
 
-dnn_kernels/build-cluster/%: snRuntime-build/libsnRuntime-cluster.a snRuntime-build/libsnRuntime-banshee.a
+# dnn_kernels/build-{banshee,cluster}/kernel-arg1-arg2-arg3-...
+# dnn_kernels/build-<platform>/<kernel>
+dnn_kernels/%: snRuntime-build/libsnRuntime-$$(word 3, $$(subst -, , $$(subst /, , $$@))).a
+	PLATFORM=$(word 3, $(subst -, , $(subst /, , $@))) && \
+	KERNEL=$(word 3, $(subst /, , $@)) && \
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
@@ -101,26 +114,11 @@ dnn_kernels/build-cluster/%: snRuntime-build/libsnRuntime-cluster.a snRuntime-bu
 				/tools/riscv-llvm/riscv32-unknown-elf/lib/libc.a \
 				/tools/riscv-llvm/riscv32-unknown-elf/lib/libm.a \
 				/tools/riscv-llvm/lib/clang/12.0.1/lib/libclang_rt.builtins-riscv32.a \
-				/repo/snRuntime-build/libsnRuntime-cluster.a \
+				/repo/snRuntime-build/libsnRuntime-$$PLATFORM.a \
 				\" && \
 			export OBJDUMP=\"/tools/riscv-llvm/bin/llvm-objdump --mcpu=snitch\" && \
-			BUILD_DIR=build-cluster make build-cluster/$(@:dnn_kernels/build-cluster/%=%) build-cluster/$(@:dnn_kernels/build-cluster/%=%.s) && \
-			export LDFLAGS=\" \
-				-flto \
-				-mcpu=snitch -nostartfiles -fuse-ld=lld -Wl,--image-base=0x80000000 \
-				-nostdlib \
-				-static \
-				-Wl,-z,norelro \
-				-Wl,--gc-sections \
-				-Wl,--no-relax \
-				-nodefaultlibs \
-				-T /repo/snRuntime-build/common.ld \
-				/tools/riscv-llvm/riscv32-unknown-elf/lib/libc.a \
-				/tools/riscv-llvm/riscv32-unknown-elf/lib/libm.a \
-				/tools/riscv-llvm/lib/clang/12.0.1/lib/libclang_rt.builtins-riscv32.a \
-				/repo/snRuntime-build/libsnRuntime-banshee.a \
-				\" && \
-			BUILD_DIR=build-banshee make build-banshee/$(@:dnn_kernels/build-cluster/%=%) build-banshee/$(@:dnn_kernels/build-cluster/%=%.s)"
+			BUILD_DIR=build-$$PLATFORM make build-$$PLATFORM/$$KERNEL && \
+			echo target: $@ done"
 
 
 snitch_cluster.vlt:
@@ -144,11 +142,11 @@ verilator-dnn-%: dnn_kernels/build-cluster/% snitch_cluster.vlt
 		dmlsn \
 		/bin/bash -c "\
 			./snitch_cluster.vlt \
-			/repo/dnn_kernels/build-cluster/$(@:verilator-dnn-%=%)"
+			/repo/dnn_kernels/build-cluster/$*"
 
 
 # make banshee-dnn-abs-raw-fp64-sdma-ssr-frep-omp-10000-bench
-banshee-dnn-%: dnn_kernels/build-cluster/%
+banshee-dnn-%: dnn_kernels/build-banshee/%
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
@@ -159,5 +157,5 @@ banshee-dnn-%: dnn_kernels/build-cluster/%
 			banshee \
 				--configuration /repo/snitch/sw/banshee/config/snitch_cluster.yaml \
 				--latency \
-				/repo/dnn_kernels/build-banshee/$(@:banshee-dnn-%=%)"
+				/repo/dnn_kernels/build-banshee/$*"
 
