@@ -145,14 +145,28 @@ verilator-dnn-%: dnn_kernels/build-cluster/% snitch_cluster.vlt
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		dmlsn \
+		ghcr.io/pulp-platform/snitch \
 		/bin/bash -c "\
 			./snitch_cluster.vlt \
 			/repo/dnn_kernels/build-cluster/$*"
 
 
+.PHONY: postprocess-logs
+postprocess-logs:
+	$(DOCKER_RUN) -it \
+		-v `pwd`:/repo \
+		-w /repo \
+		ghcr.io/pulp-platform/snitch \
+		/bin/bash -c "\
+			for f in logs/trace_hart_*.dasm; do \
+				(cat \$$f | spike-dasm > \$${f/dasm/txt}) && \
+				(/repo/snitch/util/gen_trace.py \$${f/dasm/txt} > \$${f/dasm/trace}) && \
+				echo \"Postprocessed \$$f -spike-dasm-> \$${f/dasm/txt} -gen_trace.py-> \$${f/dasm/trace}\"; \
+			done"
+
+
 # make banshee-dnn-matmul-8-64-32-32-matmul_raw_fp64_sdma_ssr_frep_omp-double-bench
-# make banshee-dnn-layernorm-256-256-layer_norm_raw_fp64_sdma_ssr_frep-layer_norm_raw_dm_fp64_sdma_ssr_frep-double-bench
+# make banshee-dnn-layernorm-256-256-layer_norm_raw_fp64_sdma_ssr_frep-double-bench
 # make banshee-dnn-abs-10000-eltwise_abs_raw_fp64_sdma_ssr_frep_omp-double-bench
 .PHONY: banshee-dnn-%
 banshee-dnn-%: dnn_kernels/build-banshee/%

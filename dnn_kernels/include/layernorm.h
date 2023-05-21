@@ -27,17 +27,17 @@ void layer_norm_fp64_sdma_ssr_frep(
     size_t n1, size_t n2, size_t s1, size_t s2
 );
 
-void __attribute__((noinline)) layer_norm_raw_dm_fp64_sdma_ssr_frep(
+void layer_norm_raw_fp64_sdma_ssr_frep(
     double* dst, double* src, double* mu, double* gamma, double* sigma, double* beta, double eps,
     size_t n1, size_t n2, size_t s1, size_t s2
 );
 
-void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep(
+void layer_norm_fp64_sdma_ssr_frep_omp(
     double* dst, double* src, double* mu, double* gamma, double* sigma, double* beta, double eps,
     size_t n1, size_t n2, size_t s1, size_t s2
 );
 
-void __attribute__((noinline)) layer_norm_fp64_sdma_ssr_frep_omp(
+void layer_norm_raw_fp64_sdma_ssr_frep_omp(
     double* dst, double* src, double* mu, double* gamma, double* sigma, double* beta, double eps,
     size_t n1, size_t n2, size_t s1, size_t s2
 );

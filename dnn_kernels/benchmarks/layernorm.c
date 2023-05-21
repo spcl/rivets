@@ -11,8 +11,7 @@
 #define P_B ARG0
 #define P_N ARG1
 #define OP_IMPL ARG2
-#define OP_IMPL_DM ARG3
-#define DTYPE ARG4
+#define DTYPE ARG3
 
 DTYPE ref_dst[P_B * P_N] = {0};
 DTYPE dst[P_B * P_N] = {0};
@@ -48,18 +47,10 @@ int main() {
     }
 
     unsigned long t1; asm volatile ("csrr %0, mcycle" : "=r"(t1));
-    if (snrt_is_compute_core()) {
-        OP_IMPL(
-            dst, src, mu, gamm, sigma, beta, eps,
-            P_B, P_N, P_N, 1
-        );
-    }
-    if (snrt_is_dm_core()) {
-        OP_IMPL_DM(
-            dst, src, mu, gamm, sigma, beta, eps,
-            P_B, P_N, P_N, 1
-        );
-    }
+    OP_IMPL(
+        dst, src, mu, gamm, sigma, beta, eps,
+        P_B, P_N, P_N, 1
+    );
     unsigned long t2; asm volatile ("csrr %0, mcycle" : "=r"(t2));
     if (tid == 0) {
         printf("Cycles: %lu\n", t2 - t1);

@@ -383,65 +383,7 @@ void layer_norm_fp64_sdma_ssr_frep(
 
 static double* g_src_buf;
 
-void __attribute__((noinline)) layer_norm_raw_dm_fp64_sdma_ssr_frep(
-    double* dst, double* src, double* mu, double* gamma, double* sigma, double* beta, double eps,
-    size_t B, size_t N, size_t stride_B, size_t stride_N
-) {
-    unsigned tid = snrt_cluster_core_idx();
-    unsigned ntd = 8 /*snrt_cluster_core_num()*/;
-    const int unroll = 4;
-
-    size_t scratchpad_max_size = 1024 * 8;
-    size_t batch_buf_size = (B * N < scratchpad_max_size) ? B : (scratchpad_max_size / N);
-    if (batch_buf_size < ntd * unroll) batch_buf_size = ntd * unroll;
-
-    snrt_cluster_hw_barrier();
-
-    double* tmp_buf = g_src_buf;
-    double* gam_buf = tmp_buf + batch_buf_size * N;
-    double* bet_buf = gam_buf + N;
-
-    snrt_dma_start_1d(
-        /* dst */ gam_buf,
-        /* src */ gamma,
-        /* size */ N * sizeof(double)
-    );
-    snrt_dma_start_1d(
-        /* dst */ bet_buf,
-        /* src */ beta,
-        /* size */ N * sizeof(double)
-    );
-    snrt_dma_wait_all();
-    snrt_cluster_hw_barrier();
-
-    for (size_t b1 = 0; b1 < B; b1 += batch_buf_size) {
-        size_t b_end = b1 + batch_buf_size;
-        if (b_end > B) b_end = B;
-
-        snrt_dma_start_1d(
-            /* dst */ tmp_buf,
-            /* src */ &src[b1 * stride_B],
-            /* size */ (b_end - b1) * N * sizeof(double)
-        );
-        snrt_dma_wait_all();
-        snrt_cluster_hw_barrier();
-
-        /* main computation */
-
-        snrt_cluster_hw_barrier();
-
-        snrt_dma_start_1d(
-            /* dst */ &dst[b1 * stride_B],
-            /* src */ tmp_buf,
-            /* size */ (b_end - b1) * N * sizeof(double)
-        );
-        snrt_dma_wait_all();
-        snrt_cluster_hw_barrier();
-    }
-
-}
-
-void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep(
+void layer_norm_raw_fp64_sdma_ssr_frep(
     double* dst, double* src, double* mu, double* gamma, double* sigma, double* beta, double eps,
     size_t B, size_t N, size_t stride_B, size_t stride_N
 ) {
@@ -469,7 +411,19 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep(
     double* gam_buf = tmp_buf + batch_buf_size * N;
     double* bet_buf = gam_buf + N;
 
-    /* memcpy gamma beta */
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(
+            /* dst */ gam_buf,
+            /* src */ gamma,
+            /* size */ N * sizeof(double)
+        );
+        snrt_dma_start_1d(
+            /* dst */ bet_buf,
+            /* src */ beta,
+            /* size */ N * sizeof(double)
+        );
+        snrt_dma_wait_all();
+    }
     snrt_cluster_hw_barrier();
 
     if (tid == 0) {
@@ -492,8 +446,14 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep(
         if (b_end > B) b_end = B;
         size_t b2_len = b_end - b1;
 
-        /* memcpy src */
-
+        if (snrt_is_dm_core()) {
+            snrt_dma_start_1d(
+                /* dst */ tmp_buf,
+                /* src */ &src[b1 * stride_B],
+                /* size */ (b_end - b1) * N * sizeof(double)
+            );
+            snrt_dma_wait_all();
+        }
         snrt_cluster_hw_barrier();
 
         if (tid == 0) {
@@ -601,7 +561,14 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep(
 
         snrt_cluster_hw_barrier();
 
-        /* memcpy dst */
+        if (snrt_is_dm_core()) {
+            snrt_dma_start_1d(
+                /* dst */ &dst[b1 * stride_B],
+                /* src */ tmp_buf,
+                /* size */ (b_end - b1) * N * sizeof(double)
+            );
+            snrt_dma_wait_all();
+        }
         snrt_cluster_hw_barrier();
     }
 
@@ -759,7 +726,7 @@ void layer_norm_fp64_sdma_ssr_frep_omp(
     //snrt_l1free(src_buf);
 }
 
-void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep_omp(
+void layer_norm_raw_fp64_sdma_ssr_frep_omp(
     double* dst, double* src, double* mu, double* gamma, double* sigma, double* beta, double eps,
     size_t B, size_t N, size_t stride_B, size_t stride_N
 ) {
@@ -787,12 +754,24 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep_omp(
     double* gam_buf = tmp_buf + batch_buf_size * N;
     double* bet_buf = gam_buf + N;
 
-    /* memcpy gamma beta */
+    if (snrt_is_dm_core()) {
+        snrt_dma_start_1d(
+            /* dst */ gam_buf,
+            /* src */ gamma,
+            /* size */ N * sizeof(double)
+        );
+        snrt_dma_start_1d(
+            /* dst */ bet_buf,
+            /* src */ beta,
+            /* size */ N * sizeof(double)
+        );
+        snrt_dma_wait_all();
+    }
     snrt_cluster_hw_barrier();
 
     size_t b2_len_thr = batch_buf_size / ntd;
 
-    if (1 /* is compute core */) {
+    if (snrt_is_compute_core()) {
         snrt_ssr_loop_4d(SNRT_SSR_DM0,
             unroll, N, 4, b2_len_thr / unroll, 
             N * sizeof(double), sizeof(double), 0, N * sizeof(double) * unroll
@@ -812,10 +791,17 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep_omp(
         if (b_end > B) b_end = B;
         size_t b2_len = b_end - b1;
 
-        /* memcpy src */
+        if (snrt_is_dm_core()) {
+            snrt_dma_start_1d(
+                /* dst */ tmp_buf,
+                /* src */ &src[b1 * stride_B],
+                /* size */ (b_end - b1) * N * sizeof(double)
+            );
+            snrt_dma_wait_all();
+        }
 
         snrt_cluster_hw_barrier();
-        if (1 /* is compute core */) {
+        if (snrt_is_compute_core()) {
             
             snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, &tmp_buf[N * b2_len_thr * tid]);
             snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, gam_buf);
@@ -920,7 +906,14 @@ void __attribute__((noinline)) layer_norm_raw_fp64_sdma_ssr_frep_omp(
 
         snrt_cluster_hw_barrier();
 
-        /* memcpy dst */
+        if (snrt_is_dm_core()) {
+            snrt_dma_start_1d(
+                /* dst */ &dst[b1 * stride_B],
+                /* src */ tmp_buf,
+                /* size */ (b_end - b1) * N * sizeof(double)
+            );
+            snrt_dma_wait_all();
+        }
         snrt_cluster_hw_barrier();
     }
 
