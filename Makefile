@@ -3,6 +3,9 @@ DOCKER_OPTS ?= --security-opt label=disable
 DOCKER_RUN ?= $(DOCKER) run $(DOCKER_OPTS)
 
 
+.SECONDARY: 
+# no target is removed because it is considered intermediate
+
 .SECONDEXPANSION:
 #https://www.gnu.org/software/make/manual/make.html#Secondary-Expansion
 
@@ -74,10 +77,12 @@ dnn_kernels/build-%/libDNNKernels.a: snRuntime-build/libsnRuntime-%.a
 		"
 
 
+get-platform = $(word 3, $(subst -, , $(subst /, , $@)))
+
 # dnn_kernels/build-{banshee,cluster}/kernel-arg1-arg2-arg3-...
 # dnn_kernels/build-<platform>/<kernel>
-dnn_kernels/%: snRuntime-build/libsnRuntime-$$(word 3, $$(subst -, , $$(subst /, , $$@))).a
-	PLATFORM=$(word 3, $(subst -, , $(subst /, , $@))) && \
+dnn_kernels/%: snRuntime-build/libsnRuntime-$$(get-platform).a
+	PLATFORM=$(get-platform) && \
 	KERNEL=$(word 3, $(subst /, , $@)) && \
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
@@ -100,7 +105,7 @@ dnn_kernels/%: snRuntime-build/libsnRuntime-$$(word 3, $$(subst -, , $$(subst /,
 				\" && \
 			export AR=/tools/riscv-llvm/bin/llvm-ar && \
 			export RANLIB=/tools/riscv-llvm/bin/llvm-ranlib && \
-			cd /repo/dnn_kernels && rm -rf build-banshee build-cluster && mkdir build-banshee && mkdir build-cluster && \
+			cd /repo/dnn_kernels && mkdir -p build-$$PLATFORM && \
 			export LDFLAGS=\" \
 				-flto \
 				-mcpu=snitch -nostartfiles -fuse-ld=lld -Wl,--image-base=0x80000000 \
@@ -134,7 +139,8 @@ snitch_cluster.vlt:
 		cp bin/snitch_cluster.vlt /repo/snitch_cluster.vlt"
 
 
-# make verilator-dnn-abs-raw-fp64-sdma-ssr-frep-omp-10000-bench
+# make verilator-dnn-matmul-8-64-32-32-matmul_raw_fp64_sdma_ssr_frep_omp-double-bench
+.PHONY: verilator-dnn-%
 verilator-dnn-%: dnn_kernels/build-cluster/% snitch_cluster.vlt
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
@@ -145,7 +151,10 @@ verilator-dnn-%: dnn_kernels/build-cluster/% snitch_cluster.vlt
 			/repo/dnn_kernels/build-cluster/$*"
 
 
-# make banshee-dnn-abs-raw-fp64-sdma-ssr-frep-omp-10000-bench
+# make banshee-dnn-matmul-8-64-32-32-matmul_raw_fp64_sdma_ssr_frep_omp-double-bench
+# make banshee-dnn-layernorm-256-256-layer_norm_raw_fp64_sdma_ssr_frep-layer_norm_raw_dm_fp64_sdma_ssr_frep-double-bench
+# make banshee-dnn-abs-10000-eltwise_abs_raw_fp64_sdma_ssr_frep_omp-double-bench
+.PHONY: banshee-dnn-%
 banshee-dnn-%: dnn_kernels/build-banshee/%
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
