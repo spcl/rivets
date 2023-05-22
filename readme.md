@@ -5,14 +5,15 @@
 Run simulation in banshee. Suitable for correctness checks but not cycle-accurate.
 
 ```
-make banshee-dnn-abs-raw-fp64-sdma-ssr-frep-omp-10000-bench
+make banshee-dnn-matmul-8-64-32-32-matmul_raw_fp64_sdma_ssr_frep_omp-double-bench
+make banshee-dnn-layernorm-64-64-layer_norm_raw_fp64_sdma_ssr_frep-double-bench
+make banshee-dnn-abs-10000-eltwise_abs_raw_fp64_sdma_ssr_frep_omp-double-bench
 ```
 
 Run simulation with verilator: cycle-accurate but slow.
 
 ```
-make verialtor-dnn-abs-raw-fp64-sdma-ssr-frep-omp-10000-bench
+make verilator-dnn-matmul-8-64-32-32-matmul_raw_fp64_sdma_ssr_frep_omp-double-bench
+make verilator-dnn-layernorm-64-64-layer_norm_raw_fp64_sdma_ssr_frep-double-bench
+make verilator-dnn-abs-10000-eltwise_abs_raw_fp64_sdma_ssr_frep_omp-double-bench
 ```
-
-See the list of all available targets in [dnn_kernels/benchmarks](dnn_kernels/benchmarks).
-Kernels has the following names `{kernel}.c`. Targets to run simulation are `verilator-dnn-{kernel}-bench` and `banshee-dnn-{kernel}-bench`.
