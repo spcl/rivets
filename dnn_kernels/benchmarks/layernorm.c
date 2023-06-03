@@ -45,13 +45,14 @@ int main() {
             beta[i] = (DTYPE)(i % 30) - 10;
         }
     }
-
-    unsigned long t1; asm volatile ("csrr %0, mcycle" : "=r"(t1));
+    snrt_cluster_hw_barrier();
+    unsigned long t1 = read_csr(mcycle);
     OP_IMPL(
         dst, src, mu, gamm, sigma, beta, eps,
         P_B, P_N, P_N, 1
     );
-    unsigned long t2; asm volatile ("csrr %0, mcycle" : "=r"(t2));
+    unsigned long t2 = read_csr(mcycle);
+    snrt_cluster_hw_barrier();
     if (tid == 0) {
         printf("Cycles: %lu\n", t2 - t1);
     }
