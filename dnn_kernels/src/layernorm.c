@@ -401,7 +401,7 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
     size_t stages = 2;
 
     size_t batch_buf_size = B;
-    while (stages * batch_buf_size * N + N + N > scratchpad_max_size && batch_buf_size > ntd * unroll) {
+    while (stages * batch_buf_size * N + N + N > scratchpad_max_size && batch_buf_size > ntd) {
         batch_buf_size /= 2;
     }
 
@@ -450,17 +450,17 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
     }
 
     if (tid == 0) {
-        snrt_ssr_loop_4d(SNRT_SSR_DM0,
-            unroll, N, 4, batch_buf_size / unroll, 
-            N * sizeof(double), sizeof(double), 0, N * sizeof(double) * unroll
+        snrt_ssr_loop_3d(SNRT_SSR_DM0,
+            N, 4, batch_buf_size, 
+            sizeof(double), 0, N * sizeof(double)
         );
-        snrt_ssr_loop_3d(SNRT_SSR_DM1,
-            unroll, 2 * N, batch_buf_size / unroll,
-            0, sizeof(double), 0 * unroll
+        snrt_ssr_loop_4d(SNRT_SSR_DM1,
+            unroll, 2, N / unroll, batch_buf_size,
+            2 * sizeof(double), sizeof(double), 2 * sizeof(double) * unroll, 0
         );
-        snrt_ssr_loop_4d(SNRT_SSR_DM2,
-            unroll, N, 2, batch_buf_size / unroll,
-            N * sizeof(double), sizeof(double), 0, N * sizeof(double) * unroll
+        snrt_ssr_loop_3d(SNRT_SSR_DM2,
+            N, 2, batch_buf_size,
+            sizeof(double), 0, N * sizeof(double)
         );
     }
 
@@ -498,15 +498,15 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
         }
 
         if (tid == 0) {
-            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_4D, tmp_buf0);
-            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_3D, gam_buf);
-            snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_4D, tmp_buf0);
+            snrt_ssr_read(SNRT_SSR_DM0, SNRT_SSR_3D, tmp_buf0);
+            snrt_ssr_read(SNRT_SSR_DM1, SNRT_SSR_4D, gam_buf);
+            snrt_ssr_write(SNRT_SSR_DM2, SNRT_SSR_3D, tmp_buf0);
 
             snrt_ssr_enable();
-            for (size_t b2 = 0; b2 < b2_len; b2 += unroll) {
+            for (size_t b2 = 0; b2 < b2_len; b2 += 1) {
                 size_t b = b1 + b2;
 
-                register double r[unroll];
+                double r[unroll];
 
                 for (size_t i = 0; i < unroll; i++) {
                     r[i] = 0;
@@ -519,22 +519,29 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
                     "fadd.d %[mu2], ft0, %[mu2];"
                     "fadd.d %[mu3], ft0, %[mu3];"
                     : [mu0] "+f"(r[0]), [mu1] "+f"(r[1]), [mu2] "+f"(r[2]), [mu3] "+f"(r[3])
-                    : [reps] "r"(N - 1), [unroll] "i"(unroll)
+                    : [reps] "r"(N / unroll - 1), [unroll] "i"(unroll)
                     : "ft0", "ft1", "ft2", "memory"
                 );
-                for (size_t i = 0; i < unroll; i++) {
-                    asm volatile("fmul.d %0, %0, %1" : "+f"(r[i]) : "f"(1. / N) : "ft0", "ft1", "ft2", "memory");
-                }
 
                 asm volatile(
-                    "frep.o %[rep], %[unroll], 0, 0;"
-                    "fsub.d ft2, ft0, %[mu0];"
-                    "fsub.d ft2, ft0, %[mu1];"
-                    "fsub.d ft2, ft0, %[mu2];"
-                    "fsub.d ft2, ft0, %[mu3];"
+                    "fadd.d %0, %0, %2;"
+                    "fadd.d %1, %1, %3;"
+                    "fadd.d %0, %0, %1;"
+                    : "+f"(r[0]), "+f"(r[2])
+                    : "f"(r[1]), "f"(r[3])
+                    : "ft0", "ft1", "ft2", "memory"
+                );
+
+                double mu = r[0];
+
+                asm volatile("fmul.d %0, %0, %1" : "+f"(mu) : "f"(1. / N) : "ft0", "ft1", "ft2", "memory");
+
+                asm volatile(
+                    "frep.o %[rep], 1, 0, 0;"
+                    "fsub.d ft2, ft0, %[mu];"
                     :
-                    : [mu0] "f"(r[0]), [mu1] "f"(r[1]), [mu2] "f"(r[2]), [mu3] "f"(r[3])
-                    , [rep] "r"(N - 1), [unroll] "i"(unroll)
+                    : [mu] "f"(mu)
+                    , [rep] "r"(N - 1)
                     : "ft0", "ft1", "ft2", "memory"
                 );
 
@@ -549,49 +556,43 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
                     "fmadd.d %[s2], ft0, ft0, %[s2];"
                     "fmadd.d %[s3], ft0, ft0, %[s3];"
                     : [s0] "+f"(r[0]), [s1] "+f"(r[1]), [s2] "+f"(r[2]), [s3] "+f"(r[3])
-                    : [rep] "r"(N - 1), [unroll] "i"(unroll)
+                    : [rep] "r"(N / unroll - 1), [unroll] "i"(unroll)
                     : "ft0", "ft1", "ft2", "memory"
                 );
 
-                for (size_t i = 0; i < unroll; i++) {
-                    asm volatile(
-                        "fmadd.d %[s], %[s], %[x], %[eps];"
-                        : [s] "+f"(r[i])
-                        : [x] "f"(1. / (N - 1)), [eps] "f"(eps), [one] "f"(1.0)
-                        : "ft0", "ft1", "ft2", "memory"
-                    );
-                }
-                for (size_t i = 0; i < unroll; i++) {
-                    asm volatile(
-                        "fsqrt.d %[s], %[s];"
-                        : [s] "+f"(r[i])
-                        : [x] "f"(1. / (N - 1)), [eps] "f"(eps), [one] "f"(1.0)
-                        : "ft0", "ft1", "ft2", "memory"
-                    );
-                }
-                for (size_t i = 0; i < unroll; i++) {
-                    asm volatile(
-                        "fdiv.d %[s], %[one], %[s];"
-                        : [s] "+f"(r[i])
-                        : [x] "f"(1. / (N - 1)), [eps] "f"(eps), [one] "f"(1.0)
-                        : "ft0", "ft1", "ft2", "memory"
-                    );
-                }
+                asm volatile(
+                    "fadd.d %0, %0, %2;"
+                    "fadd.d %1, %1, %3;"
+                    "fadd.d %0, %0, %1;"
+                    : "+f"(r[0]), "+f"(r[2])
+                    : "f"(r[1]), "f"(r[3])
+                    : "ft0", "ft1", "ft2", "memory"
+                );
 
-                register double t[unroll];
+                double std = r[0];
+
+                asm volatile(
+                    "fmadd.d %[s], %[s], %[x], %[eps];"
+                    "fsqrt.d %[s], %[s];"
+                    "fdiv.d %[s], %[one], %[s];"
+                    : [s] "+f"(std)
+                    : [x] "f"(1. / (N - 1)), [eps] "f"(eps), [one] "f"(1.0)
+                    : "ft0", "ft1", "ft2", "memory"
+                );
+
                 asm volatile(
                     "frep.o %[rep], %[unroll], 0, 0;"
-                    "fmul.d %[t0], ft1, %[f0];"
-                    "fmul.d %[t1], ft1, %[f1];"
-                    "fmul.d %[t2], ft1, %[f2];"
-                    "fmul.d %[t3], ft1, %[f3];"
+                    "fmul.d %[t0], ft1, %[s];"
+                    "fmul.d %[t1], ft1, %[s];"
+                    "fmul.d %[t2], ft1, %[s];"
+                    "fmul.d %[t3], ft1, %[s];"
                     "fmadd.d ft2, %[t0], ft0, ft1;"
                     "fmadd.d ft2, %[t1], ft0, ft1;"
                     "fmadd.d ft2, %[t2], ft0, ft1;"
                     "fmadd.d ft2, %[t3], ft0, ft1;"
-                    : [t0] "=&f"(t[0]), [t1] "=&f"(t[1]), [t2] "=&f"(t[2]), [t3] "=&f"(t[3])
-                    : [f0] "f"(r[0]), [f1] "f"(r[1]), [f2] "f"(r[2]), [f3] "f"(r[3])
-                    , [rep] "r"(N - 1), [unroll] "i"(2 * unroll)
+                    : [t0] "=&f"(r[0]), [t1] "=&f"(r[1]), [t2] "=&f"(r[2]), [t3] "=&f"(r[3])
+                    : [s] "f"(std)
+                    , [rep] "r"(N / unroll - 1), [unroll] "i"(2 * unroll)
                     : "ft0", "ft1", "ft2", "memory"
                 );
             }
@@ -891,7 +892,7 @@ void layer_norm_raw_fp64_sdma_ssr_frep_omp(
             for (size_t b2 = b2_len_thr * tid; b2 < b2_len_thr * (tid + 1); b2 += unroll) {
                 size_t b = b1 + b2;
 
-                register double r[unroll];
+                double r[unroll];
 
                 for (size_t i = 0; i < unroll; i++) {
                     r[i] = 0;
@@ -963,7 +964,7 @@ void layer_norm_raw_fp64_sdma_ssr_frep_omp(
                     );
                 }
 
-                register double t[unroll];
+                double t[unroll];
                 asm volatile(
                     "frep.o %[rep], %[unroll], 0, 0;"
                     "fmul.d %[t0], ft1, %[f0];"

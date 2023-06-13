@@ -311,7 +311,7 @@ void gemm_fp64_opt(uint32_t M, uint32_t N, uint32_t K, double* A, uint32_t ldA,
     for (uint32_t m = 0; m < M; m++) {
         uint32_t n = 0;
         for (uint32_t n0 = 0; n0 < N / unroll; n0++) {
-            register double c[unroll];
+            double c[unroll];
 
             // Load intermediate result
             if (*ALPHA) {

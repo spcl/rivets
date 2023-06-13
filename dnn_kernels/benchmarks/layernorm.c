@@ -70,7 +70,7 @@ int main() {
         printf("Verifying result...\n");
         for (size_t i = 0; i < P_B * P_N; i++) {
             if (fabs(ref_dst[i] - dst[i]) > 1e-4) {
-                //printf("(dst) Idx %d Ref: %f Res: %f Diff: %f\n", i, ref_dst[i], dst[i], fabs(ref_dst[i] - dst[i]));
+                printf("(dst) Idx %d Ref: %f Res: %f Diff: %f\n", i, ref_dst[i], dst[i], fabs(ref_dst[i] - dst[i]));
                 err = 1;
             }
         }
