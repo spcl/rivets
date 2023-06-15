@@ -1,6 +1,7 @@
 DOCKER ?= podman
-DOCKER_OPTS ?= --security-opt label=disable
+DOCKER_OPTS ?= --security-opt label=disable --rm
 DOCKER_RUN ?= $(DOCKER) run $(DOCKER_OPTS)
+DOCKER_IMG ?= ghcr.io/pulp-platform/snitch@sha256:f43d2db7c97bdcd653deb567664032940e8d9051a80a52c22f239e19fe4c310b
 
 
 .SECONDARY: 
@@ -19,7 +20,7 @@ snRuntime-build/libsnRuntime-cluster.a snRuntime-build/libsnRuntime-banshee.a:
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch \
+		$(DOCKER_IMG) \
 		/bin/bash -c "\
 			rm -rf /repo/snRuntime-build/ && \
 			mkdir -p /repo/snRuntime-build && \
@@ -38,7 +39,7 @@ dnn_kernels/build-%/libDNNKernels.a: snRuntime-build/libsnRuntime-%.a
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch \
+		$(DOCKER_IMG) \
 		/bin/bash -c "\
 			export CC=/tools/riscv-llvm/bin/clang && \
 			export CFLAGS=\" \
@@ -87,7 +88,7 @@ dnn_kernels/%: snRuntime-build/libsnRuntime-$$(get-platform).a
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch \
+		$(DOCKER_IMG) \
 		/bin/bash -c "\
 			export CC=/tools/riscv-llvm/bin/clang && \
 			export CFLAGS=\" \
@@ -130,7 +131,7 @@ snitch_cluster.vlt:
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch /bin/bash -c "\
+		$(DOCKER_IMG) /bin/bash -c "\
 		mkdir /workspace && cd /workspace && \
 		git clone https://github.com/pulp-platform/snitch.git && \
 		cd snitch/hw/system/snitch_cluster && \
@@ -145,7 +146,7 @@ verilator-dnn-%: dnn_kernels/build-cluster/% snitch_cluster.vlt
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch \
+		$(DOCKER_IMG) \
 		/bin/bash -c "\
 			./snitch_cluster.vlt \
 			/repo/dnn_kernels/build-cluster/$*"
@@ -156,7 +157,7 @@ postprocess-logs:
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch \
+		$(DOCKER_IMG) \
 		/bin/bash -c "\
 			for f in logs/trace_hart_*.dasm; do \
 				(cat \$$f | spike-dasm > \$${f/dasm/txt}) && \
@@ -173,7 +174,7 @@ banshee-dnn-%: dnn_kernels/build-banshee/%
 	$(DOCKER_RUN) -it \
 		-v `pwd`:/repo \
 		-w /repo \
-		ghcr.io/pulp-platform/snitch \
+		$(DOCKER_IMG) \
 		/bin/bash -c "\
 			RUST_MIN_STACK=134217728 \
 			SNITCH_LOG= \
