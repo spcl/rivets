@@ -540,22 +540,22 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
 
                 asm volatile(
                     "frep.o %[rep], %[unroll], 0, 0;"
-                    "fsub.d ft4, ft0, %[mu];"
-                    "fmadd.d %[s0], ft4, ft4, %[s0];"
-                    "fmul.d ft2, ft4, ft1;"
-                    "fsub.d ft4, ft0, %[mu];"
-                    "fmadd.d %[s1], ft4, ft5, %[s1];"
-                    "fmul.d ft2, ft4, ft1;"
-                    "fsub.d ft4, ft0, %[mu];"
-                    "fmadd.d %[s2], ft4, ft6, %[s2];"
-                    "fmul.d ft2, ft4, ft1;"
-                    "fsub.d ft4, ft0, %[mu];"
-                    "fmadd.d %[s3], ft4, ft7, %[s3];"
-                    "fmul.d ft2, ft4, ft1;"
+                    "fsub.d %[t0], ft0, %[mu];"
+                    "fsub.d %[t1], ft0, %[mu];"
+                    "fsub.d %[t2], ft0, %[mu];"
+                    "fsub.d %[t3], ft0, %[mu];"
+                    "fmadd.d %[s0], %[t0], %[t0], %[s0];"
+                    "fmadd.d %[s1], %[t1], %[t1], %[s1];"
+                    "fmadd.d %[s2], %[t2], %[t2], %[s2];"
+                    "fmadd.d %[s3], %[t3], %[t3], %[s3];"
+                    "fmul.d ft2, %[t0], ft1;"
+                    "fmul.d ft2, %[t1], ft1;"
+                    "fmul.d ft2, %[t2], ft1;"
+                    "fmul.d ft2, %[t3], ft1;"
                     : [s0] "+f"(r0), [s1] "+f"(r1), [s2] "+f"(r2), [s3] "+f"(r3)
-                    , [t0] "+f"(t0), [t1] "+f"(t1), [t2] "+f"(t2), [t3] "+f"(t3)
+                    , [t0] "=&f"(t0), [t1] "=&f"(t1), [t2] "=&f"(t2), [t3] "=&f"(t3)
                     : [mu] "f"(mu)
-                    , [rep] "r"(N / unroll - 1), [unroll] "r"(3 * unroll)
+                    , [rep] "r"(N / unroll - 1), [unroll] "i"(3 * unroll)
                     : "ft0", "ft1", "ft2", "memory"
                 );
 
@@ -591,8 +591,6 @@ void layer_norm_raw_fp64_sdma_ssr_frep(
                     : "ft0", "ft1", "ft2", "memory"
                 );
             }
-            __builtin_ssr_barrier(SNRT_SSR_DM0);
-            __builtin_ssr_barrier(SNRT_SSR_DM1);
             __builtin_ssr_barrier(SNRT_SSR_DM2);
             snrt_ssr_disable();
         }
