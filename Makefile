@@ -135,8 +135,8 @@ snitch_cluster.vlt:
 		mkdir /workspace && cd /workspace && \
 		git clone https://github.com/pulp-platform/snitch.git && \
 		cd snitch/hw/system/snitch_cluster && \
-		git checkout ed24b24 && \
-		make bin/snitch_cluster.vlt && \
+		git checkout 20e9d26 && \
+		make CFG_OVERRIDE=/repo/occamy_cluster.default.hjson bin/snitch_cluster.vlt && \
 		cp bin/snitch_cluster.vlt /repo/snitch_cluster.vlt"
 
 
